@@ -14,6 +14,7 @@
 @property (weak, nonatomic) IBOutlet UITextField *inputTextField;
 @property (nonatomic, strong) NSMutableArray *messages;
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *keyboardHeight;
+@property (nonatomic,strong) UIRefreshControl *refreshControl;
 
 @end
 
@@ -35,8 +36,17 @@
 }
 
 - (void)initTableView {
+    [self.messageTableView addSubview:self.refreshControl];
 	self.messageTableView.dataSource = self;
 	self.messageTableView.delegate = self;
+}
+
+-(UIRefreshControl*)refreshControl{
+    if(_refreshControl==nil){
+        _refreshControl=[[UIRefreshControl alloc] init];
+        [_refreshControl addTarget:self action:@selector(loadOldMessages:) forControlEvents:UIControlEventValueChanged];
+    }
+    return _refreshControl;
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -93,20 +103,52 @@
 
 #pragma mark - message
 
+-(NSMutableArray*)filterMessages:(NSArray*)messages{
+    NSMutableArray *typedMessages = [NSMutableArray array];
+    for (AVIMTypedMessage *message in messages) {
+        if ([message isKindOfClass:[AVIMTypedMessage class]]) {
+            [typedMessages addObject:message];
+        }
+    }
+    return typedMessages;
+}
+
 - (void)loadMessagesWhenInit {
-    [self.conversation queryMessagesBeforeId:nil timestamp:[[NSDate distantFuture] timeIntervalSince1970] * 1000 limit:100 callback: ^(NSArray *objects, NSError *error) {
-        if (error == nil) {
-            NSMutableArray *messages = [NSMutableArray array];
-            for (AVIMMessage *message in objects) {
-                if ([message isKindOfClass:[AVIMTypedMessage class]]) {
-                    [messages addObject:message];
-                }
-            }
-            self.messages = messages;
-            [self.messageTableView reloadData];
-            [self scrollToLast];
+    WEAKSELF
+    [self.conversation queryMessagesBeforeId:nil timestamp:[[NSDate distantFuture] timeIntervalSince1970] * 1000 limit:15 callback: ^(NSArray *objects, NSError *error) {
+        if([weakSelf filterError:error]){
+            weakSelf.messages =[weakSelf filterMessages:objects];
+            [weakSelf.messageTableView reloadData];
+            [weakSelf scrollToLast];
         }
     }];
+}
+
+- (void)loadOldMessages:(UIRefreshControl*)refreshControl{
+    if(self.messages.count==0){
+        [refreshControl endRefreshing];
+        return;
+    }else{
+        AVIMTypedMessage *typedMessage=self.messages[0];
+        WEAKSELF
+        [self.conversation queryMessagesBeforeId:nil timestamp:typedMessage.sendTimestamp limit:20 callback:^(NSArray *objects, NSError *error) {
+            [refreshControl endRefreshing];
+            if([weakSelf filterError:error]){
+                NSMutableArray *typedMessages=[weakSelf filterMessages:objects];
+                NSMutableArray *messages=[NSMutableArray arrayWithArray:typedMessages];
+                [messages addObjectsFromArray:weakSelf.messages];
+                weakSelf.messages=messages;
+                NSInteger count=typedMessages.count;
+                if(count>0){
+                    [weakSelf.messageTableView reloadData];
+                    if(weakSelf.messages.count>count){
+                        NSIndexPath *indexPath = [NSIndexPath indexPathForRow:count inSection:0];
+                        [weakSelf.messageTableView scrollToRowAtIndexPath:indexPath atScrollPosition:UITableViewScrollPositionTop animated:NO];
+                    }
+                }
+            }
+        }];
+    }
 }
 
 - (IBAction)onSendButtonClicked:(id)sender {
